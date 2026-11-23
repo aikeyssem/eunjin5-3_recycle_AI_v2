@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>감독기 교사용</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="top"><div class="logo">👩‍🏫</div><h1>감독기 교사용<small>모델 평가 · 혼동행렬 · 오답 모음</small></h1><span class="sp"></span><a class="btn ghost" href="index.html">학생 화면</a></div>
+  <!-- ① 모델 평가 -->
+  <section class="card" id="t-eval">
+    <h2>고정 개발용 사진으로 모델 평가</h2>
+    <p class="sub">파일 이름의 밑줄 앞부분이 실제 클래스예요 (예: <code>label_on_001.jpg</code> → label_on).</p>
+    <label class="f">모델 <select id="evModel"></select></label>
+    <label class="f">버전 <select id="evBase"><option value="models">지금 모델 (models)</option><option value="models_v0">금요일 모델 (models_v0)</option></select></label>
+    <div class="row" style="margin-top:10px">
+      <label class="btn primary" style="text-align:center">📂 사진 여러 장 고르기<input type="file" id="evFiles" accept="image/*" multiple hidden></label>
+      <label class="btn" style="text-align:center">📁 폴더 통째로 고르기 (안의 하위 폴더까지)<input type="file" id="evDir" webkitdirectory multiple hidden></label>
+    </div>
+    <div id="evStatus" class="note" style="margin-top:10px"></div>
+    <div id="evOut"></div>
+  </section>
+
+  <p class="note" style="margin-top:14px">🔒 이 화면은 고른 사진을 이 브라우저 안에서만 계산해요. 사진과 결과는 저장하거나 보내지 않아요. 필요하면 'CSV 저장'으로 선생님 컴퓨터에만 내려받아요.</p>
+</div>
+
+<script src="lib/tf.min.js"></script>
+<script src="lib/teachablemachine-image.min.js"></script>
+<script src="js/common.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const CHECK_KO = { emptied: '비우기', rinsed: '헹구기', label: '라벨 떼기', kind: '물건 종류', wipe: '휴지·물티슈 구분', size: '손바닥 크기', tape: '테이프 떼기', shaken: '부스러기 털기', box: '버릴 곳(섞지 않기)' };
+const ITEM_KO = { pet: '페트병', vinyl: '비닐·과자봉지', paper: '종이', wipe: '휴지·물티슈', other: '기타' };
+
+// ================= ① 모델 평가 =================
+$('#evModel').innerHTML = Object.entries(APP.MODELS).map(([k, m]) => `<option value="${k}">${m.name} (${m.classes.join(' / ')})</option>`).join('');
+let lastEval = null;
+$('#evDir').onchange = e => $('#evFiles').onchange(e);
+$('#evFiles').onchange = async e => {
+  const files = [...e.target.files].filter(f => /\.(jpe?g|png|webp)$/i.test(f.name)).sort((a, b) => a.name.localeCompare(b.name));
+  e.target.value = '';
+  if (!files.length) return;
+  const key = $('#evModel').value, base = $('#evBase').value, m = APP.MODELS[key];
+  $('#evOut').innerHTML = '';
+  $('#evStatus').textContent = `모델 불러오는 중… (${base}/${m.dir})`;
+  try { await evaluateFiles(files, key, base, m); }
+  catch (err) { $('#evStatus').innerHTML = `<span style="color:var(--warn)">평가 중 문제가 생겼어요: ${err.message}</span>`; console.error(err); }
+};
+async function evaluateFiles(files, key, base, m) {
+  let model;
+  try { model = await loadModel(key, base); }
+  catch (err) { $('#evStatus').innerHTML = `<span style="color:var(--warn)">모델을 불러오지 못했어요: ${base}/${m.dir}/ 에 model.json, metadata.json, weights.bin이 있는지 확인하세요.</span>`; return; }
+  const labels = model._labels;
+  const rows = [];
+  for (let i = 0; i < files.length; i++) {
+    $('#evStatus').textContent = `평가 중… ${i + 1} / ${files.length}`;
+    const f = files[i];
+    const base0 = f.name.replace(/\.[^.]+$/, '');
+    const known = [...labels, ...Object.values(APP.MODELS).flatMap(x => x.classes)].sort((a, b) => b.length - a.length);
+    const truth = known.find(c => base0 === c || base0.startsWith(c + '_')) || base0.replace(/_\d+$/, '');
+    const img = await loadImageFile(f);
+    const r = await predict(key, squishToCanvas(img, 224), base);
+    rows.push({ file: f.name, truth, pred: r.label, prob: r.prob, sure: r.sure, thumb: canvasToDataURL(squishToCanvas(img, 160), 160) });
+  }
+  lastEval = { key, base, rows, labels, ts: Date.now() };
+  $('#evStatus').textContent = `${base}/${m.dir} · 사진 ${rows.length}장 평가 완료 (${fmtTime(Date.now())})`;
+  renderEval();
+}
+function renderEval() {
+  const { key, base, rows, labels } = lastEval, m = APP.MODELS[key];
+  const truths = [...new Set(rows.map(r => r.truth))].sort((a, b) => (labels.indexOf(a) + 1 || 99) - (labels.indexOf(b) + 1 || 99));
+  const known = rows.filter(r => labels.includes(r.truth));
+  const correct = known.filter(r => r.pred === r.truth).length;
+  const lowConf = rows.filter(r => !r.sure).length;
+  let h = '';
+  if (known.length) {
+    h += `<h3>정분류율: ${correct} / ${known.length} = <span style="font-size:28px">${pct(correct / known.length)}</span></h3>`;
+    h += `<p class="note">확신 ${APP.THRESHOLD * 100}% 미만(감독기가 "잘 모르겠어요"라고 할 사진): ${lowConf}장</p>`;
+  }
+  // 혼동행렬 (행 = 실제, 열 = 예측)
+  h += `<h3>혼동행렬 (행: 실제 클래스 → 열: 감독기 판단)</h3><table class="cm"><tr><th>실제 \\ 판단</th>${labels.map(l => `<th>${m.ko[l] || l}<br><small>${l}</small></th>`).join('')}<th>클래스별 정답률</th></tr>`;
+  for (const t of truths) {
+    const rs = rows.filter(r => r.truth === t);
+    h += `<tr><th>${m.ko[t] || t}<br><small>${t}</small></th>`;
+    for (const l of labels) { const n = rs.filter(r => r.pred === l).length; h += `<td class="${l === t ? 'diag' : n ? 'off' : ''}">${n}</td>`; }
+    h += `<td>${labels.includes(t) ? pct(rs.filter(r => r.pred === t).length / rs.length) : '(모델에 없는 클래스)'}</td></tr>`;
+  }
+  h += '</table>';
+  h += `<div class="row"><button class="btn" id="evCsv">결과 CSV 저장</button></div>`;
+  const wrong = rows.filter(r => r.pred !== r.truth || !r.sure);
+  h += `<h3>틀렸거나 확신이 낮은 사진 (${wrong.length}장): 대표 오류 분석용</h3><div class="gallery">` +
+    wrong.map(r => `<figure><img src="${r.thumb}"><div><b>${r.file}</b><br>실제 ${m.ko[r.truth] || r.truth} → 판단 ${m.ko[r.pred] || r.pred} (${pct(r.prob)})</div></figure>`).join('') + '</div>';
+  $('#evOut').innerHTML = h;
+  $('#evCsv').onclick = () => download(`평가_${m.dir}_${base}_${dayKey(Date.now())}.csv`,
+    toCSV([['파일', '실제', '판단', '확률', '맞음', '확신70%이상'], ...rows.map(r => [r.file, r.truth, r.pred, r.prob.toFixed(3), r.pred === r.truth ? 'O' : 'X', r.sure ? 'O' : 'X'])]));
+}
+
+</script>
+</body>
+</html>
