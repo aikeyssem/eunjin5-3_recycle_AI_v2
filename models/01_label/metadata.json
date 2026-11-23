@@ -1,1 +1,1 @@
-{"tfjsVersion":"1.7.4","tmVersion":"2.4.19","packageVersion":"0.8.4-alpha2","packageName":"@teachablemachine/image","timeStamp":"2026-11-23T04:56:06.307Z","userMetadata":{},"modelName":"01_PET라벨_v2","labels":["label_off","label_on"],"imageSize":224}
+{"tfjsVersion":"1.7.4","tmVersion":"2.4.19","packageVersion":"0.8.4-alpha2","packageName":"@teachablemachine/image","timeStamp":"2026-11-23T08:02:46.297Z","userMetadata":{},"modelName":"01_PET라벨_v2","labels":["label_off","label_on"],"imageSize":224}
